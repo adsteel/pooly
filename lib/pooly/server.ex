@@ -29,6 +29,7 @@ defmodule Pooly.Server do
   # Callback: Init
   #
   def init([sup, pool_config]) when is_pid(sup) do
+    Process.flag(:trap_exit, true)
     monitors = :ets.new(:monitors, [:private])
     init(pool_config, %State{sup: sup, monitors: monitors})
   end
@@ -63,6 +64,33 @@ defmodule Pooly.Server do
   defp new_worker(sup) do
     {:ok, worker} = Supervisor.start_child(sup, [[]])
     worker
+  end
+
+  #
+  # Callback: :DOWN
+  #
+  def handle_info({:DOWN, ref, _, _, _}, state = %{monitors: monitors, workers: workers}) do
+    case :ets.match(monitors, {:"$1", ref}) do
+      [[pid]] ->
+        true = :ets.delete(monitors, pid)
+        {:noreply, %{state | workers: [pid | workers]}}
+      [[]] ->
+        {:noreply, state}
+    end
+  end
+
+  #
+  # Callback: :EXIT
+  #
+  def handle_info({:EXIT, pid, _reason}, state = %{monitors: monitors, workers: workers, worker_sup: worker_sup}) do
+    case :ets.lookup(monitors, pid) do
+      [{pid, _ref}] ->
+        true = Process.demonitor(pid)
+        true = :ets.delete(monitors, pid)
+        {:noreply, %{state | workers: [new_worker(worker_sup)|workers]}}
+      [[]] ->
+        {:noreply, state}
+    end
   end
 
   #
